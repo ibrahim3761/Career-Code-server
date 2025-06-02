@@ -1,13 +1,42 @@
 const express = require("express");
 const cors = require("cors");
 const app = express();
-const jwt = require('jsonwebtoken')
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 const port = process.env.PORT || 3000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 
-app.use(cors());
+app.use(
+  cors({
+    origin: ["http://localhost:5173"],
+    credentials: true,
+  })
+);
 app.use(express.json());
+app.use(cookieParser());
+
+const logger = (req, res, next) => {
+  console.log("inside the middleware");
+  next();
+};
+
+const verifyToken = (req, res, next) => {
+  const token = req?.cookies?.token;
+  console.log("cookie in the middleware", token);
+  if (!token) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+
+  jwt.verify(token, process.env.JWT_ACCESS_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: "unauthorized access" });
+    }
+    req.decoded = decoded;
+
+    next();
+  });
+};
 
 const uri = `mongodb+srv://${process.env.DB_User}:${process.env.DB_Pass}@cluster0.thvamxq.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -31,12 +60,19 @@ async function run() {
       .collection("applications");
 
     // JWT token related api
-    app.post('/jwt',async(req,res)=>{
-      const {email} = req.body;
-      const user = {email};
-      const token = jwt.sign(user, 'secret',{expiresIn: '1h'});
-      res.send({token})
-    })
+    app.post("/jwt", async (req, res) => {
+      const userData = req.body;
+      const token = jwt.sign(userData, process.env.JWT_ACCESS_SECRET, {
+        expiresIn: "1h",
+      });
+
+      // set token in the cookies
+      res.cookie("token", token, {
+        httpOnly: true,
+        secure: false,
+      });
+      res.send({ success: true });
+    });
 
     // job api
     app.get("/jobs", async (req, res) => {
@@ -55,12 +91,14 @@ async function run() {
       const query = { hr_email: email };
       const jobs = await jobsCollection.find(query).toArray();
 
-      for(const job of jobs){
-        const applicationQuery = { jobId : job._id.toString() };
-        const application_Count = await applicationsCollection.countDocuments(applicationQuery);
+      for (const job of jobs) {
+        const applicationQuery = { jobId: job._id.toString() };
+        const application_Count = await applicationsCollection.countDocuments(
+          applicationQuery
+        );
         job.application_Count = application_Count;
       }
-      res.send(jobs)
+      res.send(jobs);
     });
 
     app.get("/jobs/:id", async (req, res) => {
@@ -76,10 +114,16 @@ async function run() {
       res.send(result);
     });
 
-
     // job application related api
-    app.get("/applications", async (req, res) => {
+    app.get("/applications", logger, verifyToken, async (req, res) => {
       const email = req.query.email;
+
+      if (email !== req.decoded.email ) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+
+      // console.log('inside application api', req.cookies);
+
       const query = {
         applicant: email,
       };
