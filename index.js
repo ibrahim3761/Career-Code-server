@@ -4,15 +4,14 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 const admin = require("firebase-admin");
-const serviceAccount = require("./firebase-admins-service-key.json");
+const decoded = Buffer.from(process.env.FB_Service_Key, 'base64').toString('utf-8')
+const serviceAccount = JSON.parse(decoded)
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
 
 app.use(cors());
 app.use(express.json());
-
-
 
 const uri = `mongodb+srv://${process.env.DB_User}:${process.env.DB_Pass}@cluster0.thvamxq.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -25,37 +24,40 @@ const client = new MongoClient(uri, {
   },
 });
 
-
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.cert(serviceAccount),
 });
 
-
-const verifyFirebaseToken = async(req,res,next)=>{
+const verifyFirebaseToken = async (req, res, next) => {
   const authHeader = req.headers?.authorization;
   //console.log(authHeader);
-  if(!authHeader || !authHeader.startsWith('Bearer ')){
-    return res.status(401).send({message: 'unauthorized access'})
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).send({ message: "unauthorized access" });
   }
-  const token = authHeader.split(' ')[1]
+  const token = authHeader.split(" ")[1];
 
-  try 
-  {
+  try {
     const decoded = await admin.auth().verifyIdToken(token);
-    console.log('decoded', decoded);
-    req.decoded = decoded
+    console.log("decoded", decoded);
+    req.decoded = decoded;
     next();
-  } 
-  catch (error) {
-    return res.status(401).send({message: 'unauthorized access'});
+  } catch (error) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+};
+
+const verifyTokenEMail = (req, res, next) => {
+  if (req.query.email !== req.decoded.email) {
+    return res.status(403).send({ message: "foridden access" });
   }
 
-}
+  next();
+};
 
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
     const jobsCollection = client.db("CareerCode").collection("jobs");
     const applicationsCollection = client
@@ -74,11 +76,8 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/jobs/applications", verifyFirebaseToken, async (req, res) => {
+    app.get("/jobs/applications", verifyFirebaseToken, verifyTokenEMail, async (req, res) => {
       const email = req.query.email;
-      if(email !== req.decoded.email){
-        return res.status(403).send({message: 'foridden access'});
-      }
       const query = { hr_email: email };
       const jobs = await jobsCollection.find(query).toArray();
 
@@ -106,27 +105,28 @@ async function run() {
     });
 
     // job application related api
-    app.get("/applications", verifyFirebaseToken, async (req, res) => {
-      const email = req.query.email;
-      
-      if(email !== req.decoded.email){
-        return res.status(403).send({message: 'foridden access'});
-      }
+    app.get(
+      "/applications",
+      verifyFirebaseToken,
+      verifyTokenEMail,
+      async (req, res) => {
+        const email = req.query.email;
 
-      const query = {
-        applicant: email,
-      };
-      const result = await applicationsCollection.find(query).toArray();
-      for (const application of result) {
-        const jobId = application.jobId;
-        const jobQuery = { _id: new ObjectId(jobId) };
-        const job = await jobsCollection.findOne(jobQuery);
-        application.company = job.company;
-        application.title = job.title;
-        application.company_logo = job.company_logo;
+        const query = {
+          applicant: email,
+        };
+        const result = await applicationsCollection.find(query).toArray();
+        for (const application of result) {
+          const jobId = application.jobId;
+          const jobQuery = { _id: new ObjectId(jobId) };
+          const job = await jobsCollection.findOne(jobQuery);
+          application.company = job.company;
+          application.title = job.title;
+          application.company_logo = job.company_logo;
+        }
+        res.send(result);
       }
-      res.send(result);
-    });
+    );
 
     app.get("/applications/job/:job_id", async (req, res) => {
       const job_id = req.params.job_id;
@@ -153,10 +153,10 @@ async function run() {
       res.send(result);
     });
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
